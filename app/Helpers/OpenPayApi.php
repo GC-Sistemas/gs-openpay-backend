@@ -33,24 +33,41 @@ class OpenPayApi
 
         } catch (\OpenpayApiTransactionError $e) {
             /** Get the possible errors when try to perfom the transaction */
+            $description = 'Error: type transaction, message: '.$e->getMessage().', code:'.$e->getErrorCode().', category: '.$e->getCategory().', http_code: '.$e->getHttpCode();
             return [
                 'ok' => false,
-                'type' => 'transaction',
-                'message' => $e->getMessage(),
-                'code' => $e->getErrorCode(),
-                'category' => $e->getCategory(),
-                'http_code' => $e->getHttpCode()
+                'description' => $description
             ];
         } catch (\OpenpayApiRequestError $e) {
-            return ['ok' => false, 'type' => 'api_request', 'message' => $e->getMessage()];
+            $description = 'Error: type transaction, message: '.$e->getMessage().', code:'.$e->getErrorCode().', category: '.$e->getCategory().', http_code: '.$e->getHttpCode();
+            return [
+                'ok' => false,
+                'description' => $description
+            ];
         } catch (\OpenpayApiConnectionError $e) {
-            return ['ok' => false, 'type' => 'connection', 'message' => $e->getMessage()];
+            $description = 'Error: type transaction, message: '.$e->getMessage().', code:'.$e->getErrorCode().', category: '.$e->getCategory().', http_code: '.$e->getHttpCode();
+            return [
+                'ok' => false,
+                'description' => $description
+            ];
         } catch (\OpenpayApiAuthError $e) {
-            return ['ok' => false, 'type' => 'api_auth', 'message' => $e->getMessage()];
+            $description = 'Error: type transaction, message: '.$e->getMessage().', code:'.$e->getErrorCode().', category: '.$e->getCategory().', http_code: '.$e->getHttpCode();
+            return [
+                'ok' => false,
+                'description' => $description
+            ];
         } catch (\OpenpayApiError $e) {
-            return ['ok' => false, 'type' => 'api_error', 'message' => $e->getMessage()];
+            $description = 'Error: type transaction, message: '.$e->getMessage().', code:'.$e->getErrorCode().', category: '.$e->getCategory().', http_code: '.$e->getHttpCode();
+            return [
+                'ok' => false,
+                'description' => $description
+            ];
         } catch (\Exception $e) {
-            return ['ok' => false, 'type' => 'other', 'message' => $e->getMessage()];
+            $description = 'Error: type transaction, message: '.$e->getMessage().', code:'.$e->getErrorCode().', category: '.$e->getCategory().', http_code: '.$e->getHttpCode();
+            return [
+                'ok' => false,
+                'description' => $description
+            ];
         }
     }
 }

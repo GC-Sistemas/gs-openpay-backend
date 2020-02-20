@@ -6,11 +6,11 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use App\Helpers\OpenPayApi;
 use App\Transaction;
+use App\Card;
+use App\Client;
 
 class PayController extends Controller
 {
-  /** Variables to use anywhere in the class */
-  public $transactionData;
 
   public function pay(Request $request)
   {
@@ -26,45 +26,120 @@ class PayController extends Controller
         'message' => $result['message']
       ], 400);
     }
-    /** Get charge array to provided to OpenPay Api */
-    $chargeData = $result['charge'];
+
+    /** Create a new client */
+    $createClient = $this->createClient($result['client']);
 
     /** Create a new transaction in the db */
-    $create_transaction = $this->createTransaction($chargeData, $user_id);
+    $create_transaction = $this->createTransaction($result['transaction'], $user_id, $createClient['client_id']);
+
     /** Initialize helper to access functions of the same */
     $OpenPayApi = new OpenPayApi();
 
     /** Use charge function to try to charge the payment */
-    $charge = $OpenPayApi->charge($chargeData);
-    
+    $charge = $OpenPayApi->charge($result['charge']);
+
     /** Validate the response */
     if ($charge['ok'] == false) {
+
       /** Get the error information and update that transaction */
       $dataToUpdate = [
         'status' => 'error',
-        'description' => 'Error: ' . $charge['type'] . ', ' . $charge['message']
+        'description' => $charge['description']
       ];
 
-      $status = 'error';
-      $order = $chargeData['description'];
-      $update_transaction = $this->updateTransaction($dataToUpdate, $order, $status);
+      $update_transaction = $this->updateTransaction($dataToUpdate, $result['transaction']['order'], 'error');
 
       return response()->json([
         'ok' => false,
-        'message' => $charge['message']
+        'message' => $charge['description']
       ], 400);
-
+      
     } else {
+      /** Process the response provided by OpenPayApi */
+      $processChargeData = $this->processChargeData($charge['result']);
+
       /** Get the transaction information and update that infomation in the db */
-      $status = $charge['result']->status;
       $order = $charge['result']->serializableData['description'];
-      $update_transaction = $this->updateTransaction($charge['result'], $order, $status);
+      $createCard = $this->createCard($processChargeData['card'], $create_transaction['transaction_id']);
+      $update_transaction = $this->updateTransaction($processChargeData['transaction'], $order, 'completed');
 
       return response()->json([
         'ok' => true,
-        'data' => $this->transactionData
+        'data' => $processChargeData
       ], 200);
     }
+  }
+
+  private function createClient($data)
+  {
+    /** Create a new client in the db */
+    $client = new Client();
+    $client->name = $data['name'];
+    $client->last_name = $data['last_name'];
+    $client->phone_number = $data['phone_number'];
+    $client->email = $data['email'];
+    $client->city = $data['city'];
+    $client->state = $data['state'];
+    $client->address = $data['address'];
+    $client->postal_code = $data['postal_code'];
+    $client->country_code = $data['country_code'];
+    $client->save();
+
+    return ['client_id' => $client->id];
+  }
+
+  private function createCard($data, $transaction_id)
+  {
+    /** Create a new card in the db */
+    $card = new Card();
+    $card->transaction_id = $transaction_id;
+    $card->card_type = $data['card_type'];
+    $card->card_brand = $data['card_brand'];
+    $card->card_bank_name = $data['card_bank_name'];
+    $card->card_number = $data['card_number'];
+    $card->holder_name = $data['holder_name'];
+    $card->card_expiration_year = $data['card_expiration_year'];
+    $card->card_expiration_month = $data['card_expiration_month'];
+    $card->save();
+    return true;
+  }
+
+  private function createTransaction($data, $user_id, $client_id)
+  {
+    /** Create a new transaction in the db */
+    $transaction = new Transaction();
+    $transaction->user_id = $user_id;
+    $transaction->client_id = $client_id;
+    $transaction->order = $data['order'];
+    $transaction->device_session_id = $data['device_session_id'];
+    $transaction->token_id = $data['token_id'];
+    $transaction->amount = $data['amount'];
+    $transaction->currency = $data['currency'];
+    $transaction->save();
+
+    return ['transaction_id' => $transaction->id];
+  }
+
+  private function updateTransaction($data, $order, $status)
+  {
+    if ($status != 'completed') {
+      $updateData = [
+        'status' => $data['status'],
+        'description' => $data['description']
+      ];
+    } else {
+      $updateData = [
+        'transaction_id' => $data['transaction_id'],
+        'authorization' => $data['authorization'],
+        'currency' => $data['currency'],
+        'status' => $data['status'],
+        'amount' => $data['amount'],
+        'description' => 'Succesful transaction'
+      ];
+    }
+    $update = Transaction::where('order', $order)->update($updateData);
+    return true;
   }
 
   private function validateData($data)
@@ -122,85 +197,79 @@ class PayController extends Controller
         'message' => 'The amount field, should be numeric'
       ];
     }
-    /** We create the necessary array to provide the open pay collection system */
-    $customer = [
-      'name' => $name,
-      'last_name' => $last_name,
-      'email' => $email,
-      'phone_number' => $phone_number,
-      'address' => [
-        'city' => $city,
-        'state' => $state,
-        'line1' => $line1,
-        'line2' => $line2,
-        'postal_code' => $postal_code,
-        'country_code' => $country_code,
-      ]
-    ];
+    $order = Carbon::now()->timestamp;
+    /** Array to create one charge */
 
     $charge = [
       'method' => 'card',
       'source_id' => $token_id,
       'amount' => $amount,
       'currency' => $currency,
-      'description' => Carbon::now()->timestamp,
+      'description' => $order,
       'device_session_id' => $device_session_id,
-      'customer' => $customer
+      'customer' => [
+        'name' => $name,
+        'last_name' => $last_name,
+        'email' => $email,
+        'phone_number' => $phone_number,
+        'address' => [
+          'city' => $city,
+          'state' => $state,
+          'line1' => $line1,
+          'line2' => $line2,
+          'postal_code' => $postal_code,
+          'country_code' => $country_code,
+        ]
+      ]
     ];
 
-    return ['ok' => true, 'charge' => $charge];
+    /** Array to create one client in the database */
+    $client = [
+      'name' => $name,
+      'last_name' => $last_name,
+      'email' => $email,
+      'phone_number' => $phone_number,
+      'address' => $line1 . ' ' . $line2,
+      'city' => $city,
+      'state' => $state,
+      'postal_code' => $postal_code,
+      'country_code' => $country_code,
+    ];
+
+    /** Array to create one transaction in the database */
+    $transaction = [
+      'order' => $order,
+      'device_session_id' => $device_session_id,
+      'token_id' => $token_id,
+      'amount' => $amount,
+      'currency' => $currency,
+    ];
+
+    return ['ok' => true, 'charge' => $charge, 'client' => $client, 'transaction' => $transaction];
   }
 
-  private function createTransaction($data, $user_id)
+  private function processChargeData($data)
   {
-    /** Create a new transaction in the db */
-    $transaction = new Transaction();
-    $transaction->user_id = $user_id;
-    $transaction->order = $data['description'];
-    $transaction->device_session_id = $data['device_session_id'];
-    $transaction->token_id = $data['source_id'];
-    $transaction->name = $data['customer']['name'];
-    $transaction->last_name = $data['customer']['last_name'];
-    $transaction->phone_number = $data['customer']['phone_number'];
-    $transaction->email = $data['customer']['email'];
-    $transaction->city = $data['customer']['address']['city'];
-    $transaction->state = $data['customer']['address']['state'];
-    $transaction->address = $data['customer']['address']['line1'] . ' ' . $data['customer']['address']['line2'];
-    $transaction->postal_code = $data['customer']['address']['postal_code'];
-    $transaction->country_code = $data['customer']['address']['country_code'];
-    $transaction->save();
-    return true;
-  }
+    $card = [
+      'card_type' => $data->card->type,
+      'card_brand' => $data->card->brand,
+      'card_bank_name' => $data->card->bank_name,
 
-  private function updateTransaction($data, $order, $status)
-  {
-    if ($status != 'completed') {
-      $this->transactionData = [
-        'status' => $data['status'],
-        'description' => $data['description']
-      ];
-    } else {
-      $this->transactionData = [
-        'transaction_id' => $data->id,
-        'authorization' => $data->authorization,
-        'currency' => $data->currency,
-        'status' => $data->status,
-        'amount' => $data->serializableData['amount'],
+      'card_number' => $data->card->serializableData['card_number'],
+      'holder_name' => $data->card->serializableData['holder_name'],
+      'card_expiration_year' => $data->card->serializableData['expiration_year'],
+      'card_expiration_month' => $data->card->serializableData['expiration_month'],
+    ];
 
-        'card_type' => $data->card->type,
-        'card_brand' => $data->card->brand,
-        'card_bank_name' => $data->card->bank_name,
+    $transaction = [
+      'transaction_id' => $data->id,
+      'authorization' => $data->authorization,
+      'currency' => $data->currency,
+      'status' => $data->status,
+      'amount' => $data->serializableData['amount'],
+      'description' => 'Succesful transaction'
+    ];
 
-        'card_number' => $data->card->serializableData['card_number'],
-        'holder_name' => $data->card->serializableData['holder_name'],
-        'card_expiration_year' => $data->card->serializableData['expiration_year'],
-        'card_expiration_month' => $data->card->serializableData['expiration_month'],
-        'description' => 'Succesful transaction'
-      ];
-    }
-    
-    $update = Transaction::where('order', $order)->update($this->transactionData);
-
-    return true;
+    return [ 'card' => $card, 'transaction' => $transaction ];
   }
 }
